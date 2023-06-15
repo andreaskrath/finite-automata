@@ -7,6 +7,7 @@ pub struct Dfa<'a> {
     state_map: HashMap<&'a str, State<'a>>,
     current_state: State<'a>,
     state_order: Vec<&'a str>,
+    alphabet: Vec<char>,
 }
 
 impl<'a> Dfa<'a> {
@@ -19,6 +20,7 @@ impl<'a> Dfa<'a> {
         accept_states: Vec<&'a str>,
         state_map: HashMap<&'a str, State<'a>>,
         current_state: State<'a>,
+        alphabet: Vec<char>,
     ) -> Self {
         Self {
             initial_state,
@@ -26,6 +28,7 @@ impl<'a> Dfa<'a> {
             state_map,
             current_state,
             state_order: Vec::new(),
+            alphabet,
         }
     }
 
@@ -37,6 +40,7 @@ impl<'a> Dfa<'a> {
     /// ```
     /// # use fa::dfa::{Dfa, State};
     /// # let mut dfa = Dfa::builder()
+    /// #     .alphabet(['a', 'b'])
     /// #     .initial_state("q0")
     /// #     .accept_states(["q1"])
     /// #     .states([
@@ -101,6 +105,7 @@ pub struct DfaBuilder<'a> {
     initial_state: Option<&'a str>,
     accept_states: Option<Vec<&'a str>>,
     states: Option<Vec<State<'a>>>,
+    alphabet: Option<Vec<char>>,
 }
 
 impl<'a> DfaBuilder<'a> {
@@ -128,12 +133,21 @@ impl<'a> DfaBuilder<'a> {
         self
     }
 
+    pub fn alphabet<I>(mut self, alphabet: I) -> Self
+    where
+        I: IntoIterator<Item = char>,
+    {
+        self.alphabet = Some(alphabet.into_iter().collect());
+        self
+    }
+
     pub fn build(mut self) -> Dfa<'a> {
         let state_map = match self.states {
             // The some arm should check and ensure that duplicates are not made (i.e. that they same key is not used twice).
             Some(states) => {
                 let mut state_map: HashMap<&'a str, State<'a>> = HashMap::new();
                 for state in states {
+                    // Same here
                     state_map.insert(state.state_name, state);
                 }
                 state_map
@@ -155,6 +169,7 @@ impl<'a> DfaBuilder<'a> {
             self.accept_states.take().unwrap(),
             state_map,
             current_state,
+            self.alphabet.take().unwrap(),
         )
     }
 }
@@ -187,6 +202,7 @@ mod test {
     #[test]
     fn valid_input() {
         let mut dfa = Dfa::builder()
+            .alphabet(['a', 'b'])
             .initial_state("q1")
             .accept_states(["q2"])
             .states([
@@ -208,6 +224,7 @@ mod test {
     #[test]
     fn invalid_input() {
         let mut dfa = Dfa::builder()
+            .alphabet(['a', 'b'])
             .initial_state("q1")
             .accept_states(["q2"])
             .states([
