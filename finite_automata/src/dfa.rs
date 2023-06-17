@@ -14,10 +14,20 @@ pub struct Dfa {
     initial_state: Rc<str>,
     accept_states: Box<[Rc<str>]>,
     current_state: Rc<str>,
+    state_order: Vec<Rc<str>>,
 }
 
 impl<'a> Dfa {
     // region: Public API
+
+    /// Returns a `DfaBuilder`, which is used to create a Dfa.
+    ///
+    /// This method exists for convenience, and simply calls the [`DfaBuilder::new`] function.
+    ///
+    /// **For information about the builder and examples of its usage, see the documentation of the [`DfaBuilder`]**
+    pub fn builder() -> DfaBuilder<'a> {
+        DfaBuilder::new()
+    }
 
     /// Advances the Dfa with the provided input char.
     #[inline]
@@ -25,6 +35,7 @@ impl<'a> Dfa {
         if !self.alphabet.contains(&input) {
             return Err(DfaError::InvalidInputChar(input));
         }
+        self.state_order.push(Rc::clone(&self.current_state));
 
         // all possible transitions are checked during the build,
         // as such it should be impossible to have an invalid transition at this point
@@ -37,7 +48,57 @@ impl<'a> Dfa {
     }
 
     /// Checks if the provided input is accepted by the defined Dfa.
-    pub fn check_input(&mut self, input_str: &str) {}
+    ///
+    /// **This method is self-contained, meaning it starts in the `initial state`, and resets to the `initial state` after computing the input.**
+    ///
+    /// Should you wish to check an input without this behaviour, then use [`check_input_without_reset`] method instead.
+    pub fn check_input(&mut self, input_str: &str) -> Result<bool, DfaError<'a>> {
+        self.current_state = Rc::clone(&self.initial_state);
+
+        for c in input_str.chars() {
+            self.advance(c)?;
+        }
+
+        self.current_state = Rc::clone(&self.initial_state);
+
+        Ok(self.in_accept_state())
+    }
+
+    pub fn check_input_without_reset(&mut self, input_str: &str) -> Result<bool, DfaError<'a>> {
+        for c in input_str.chars() {
+            self.advance(c)?;
+        }
+
+        Ok(self.in_accept_state())
+    }
+
+    /// Returns the order in which the Dfa visited its states.
+    ///
+    /// This method starts by appending the current state of the Dfa to the state order,
+    /// meaning the returned slice will always contain at least one state.
+    #[inline]
+    pub fn state_order(&mut self) -> Box<[&str]> {
+        self.state_order.push(Rc::clone(&self.current_state));
+        self.state_order.iter().map(|s| s.as_ref()).collect()
+    }
+
+    /// Resets the recorded state order of the Dfa.
+    #[inline]
+    pub fn reset_state_order(&mut self) {
+        self.state_order.clear();
+    }
+
+    /// Checks if the current state of the Dfa is an accept state.
+    #[inline]
+    pub fn in_accept_state(&self) -> bool {
+        self.accept_states.contains(&self.current_state)
+    }
+
+    /// Resets the current state of the Dfa to its initial state.
+    #[inline]
+    pub fn reset_state(&mut self) {
+        self.current_state = Rc::clone(&self.initial_state);
+    }
 
     // endregion
 
@@ -75,6 +136,11 @@ impl<'a> DfaBuilder<'a> {
         self
     }
 
+    pub fn accept_states(mut self, states: &'a [&'a str]) -> Self {
+        self.accept_states = Some(states);
+        self
+    }
+
     pub fn states(mut self, states: &'a [DfaState<'a>]) -> Self {
         self.states = Some(states);
         self
@@ -102,6 +168,7 @@ impl<'a> DfaBuilder<'a> {
             initial_state: Rc::clone(&start_state),
             accept_states: self.generate_accept_states(&state_map)?,
             current_state: start_state,
+            state_order: Vec::new(),
         })
     }
 
@@ -278,5 +345,15 @@ pub enum DfaError<'a> {
     #[error("'{0}' is not a part of the defined alphabet")]
     InvalidInputChar(char),
 }
+
+// endregion
+
+// region: Tests
+
+#[cfg(test)]
+mod dfa_builder {}
+
+#[cfg(test)]
+mod public_api {}
 
 // endregion
