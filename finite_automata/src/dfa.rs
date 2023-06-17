@@ -2,6 +2,7 @@ use std::{collections::HashMap, rc::Rc};
 
 // region: Types
 
+/// A wrapper type for the HashMap containing the transitions of the Dfa.
 type TransitionTable = HashMap<(char, Rc<str>), Rc<str>>;
 
 // endregion
@@ -49,7 +50,7 @@ impl<'a> Dfa {
 
     /// Checks if the provided input is accepted by the defined Dfa.
     ///
-    /// **This method is self-contained, meaning it starts in the `initial state`, and resets to the `initial state` after computing the input.**
+    /// **This method is self-contained, meaning it starts in the `initial state`.**
     ///
     /// Should you wish to check an input without this behaviour, then use [`check_input_without_reset`] method instead.
     pub fn check_input(&mut self, input_str: &str) -> Result<bool, DfaError<'a>> {
@@ -58,8 +59,6 @@ impl<'a> Dfa {
         for c in input_str.chars() {
             self.advance(c)?;
         }
-
-        self.current_state = Rc::clone(&self.initial_state);
 
         Ok(self.in_accept_state())
     }
@@ -151,6 +150,10 @@ impl<'a> DfaBuilder<'a> {
 
         let state_map: HashMap<&str, Rc<str>> = match self.states {
             Some(slice) => {
+                if slice.is_empty() {
+                    return Err(EmptyStates);
+                }
+
                 let mut map = HashMap::new();
                 for state in slice.iter() {
                     map.insert(state.name.as_ref(), Rc::clone(&state.name));
@@ -202,7 +205,7 @@ impl<'a> DfaBuilder<'a> {
             for (trans_input, trans_dest) in state.transitions.iter() {
                 // all transitions must be defined with symbols that are a part of the defined alphabet
                 if !alphabet_slice.contains(trans_input) {
-                    return Err(InvalidCharTransition(*trans_input));
+                    return Err(CharNotInAlphabet(*trans_input));
                 }
 
                 match state_map.get(trans_dest) {
@@ -233,12 +236,7 @@ impl<'a> DfaBuilder<'a> {
                     }
                 }
 
-                unsafe {
-                    Ok(Box::from_raw(std::slice::from_raw_parts_mut(
-                        slice.as_ptr() as *mut char,
-                        slice.len(),
-                    )))
-                }
+                Ok(slice.to_vec().into_boxed_slice())
             }
             None => Err(AlphabetNotDefined),
         }
@@ -320,26 +318,28 @@ impl<'a> DfaState<'a> {
 
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum DfaError<'a> {
     #[error("the alphabet for the dfa was not defined")]
     AlphabetNotDefined,
-    #[error("'{0}' is not an ASCII character")]
-    NonAsciiChar(char),
     #[error("the states of the dfa were not defined")]
     StatesNotDefined,
+    #[error("the initial state was not defined")]
+    InitialStateNotDefined,
+    #[error("the accept states were not defined")]
+    AcceptStatesNotDefined,
+    #[error("the provided states slice was empty")]
+    EmptyStates,
+    #[error("'{0}' is not an ASCII character")]
+    NonAsciiChar(char),
     #[error("'{0}' is not a part of the defined alphabet, and cannot be used in a transition")]
-    InvalidCharTransition(char),
+    CharNotInAlphabet(char),
     #[error("the state '{0}' does not have a transition for the alphabet character '{1}'")]
     StateMissingTransition(&'a str, char),
     #[error("'{0}' is not one of the defined states, and cannot be used as a destination for a transition")]
     InvalidTransitionDestination(&'a str),
-    #[error("the initial state was not defined")]
-    InitialStateNotDefined,
     #[error("'{0}' is not one of the defined states, and cannot be used as the initial state")]
     InvalidInitialState(&'a str),
-    #[error("the accept states were not defined")]
-    AcceptStatesNotDefined,
     #[error("'{0}' is not one of the defined states, and cannot be used as an accept state")]
     InvalidAcceptState(&'a str),
     #[error("'{0}' is not a part of the defined alphabet")]
@@ -350,10 +350,356 @@ pub enum DfaError<'a> {
 
 // region: Tests
 
+// region: DfaBuilder
 #[cfg(test)]
-mod dfa_builder {}
+mod dfa_builder {
+    use super::{Dfa, DfaError, DfaState};
+
+    // in the following tests the states are build seperately, as the value is dropped during build
+    // and as no expect or unwrap is called afterwards, it causes a compile error
+
+    #[test]
+    fn alphabet_not_defined_error() {
+        let states = [DfaState::new("q1")
+            .transition('a', "q1")
+            .transition('b', "q1")];
+
+        let dfa = Dfa::builder()
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::AlphabetNotDefined));
+    }
+
+    #[test]
+    fn states_not_defined_error() {
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::StatesNotDefined));
+    }
+
+    #[test]
+    fn initial_state_not_defined_error() {
+        let states = [DfaState::new("q1")
+            .transition('a', "q1")
+            .transition('b', "q1")];
+
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .accept_states(&["q1"])
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::InitialStateNotDefined));
+    }
+
+    #[test]
+    fn accept_states_not_defined_error() {
+        let states = [DfaState::new("q1")
+            .transition('a', "q1")
+            .transition('b', "q1")];
+
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::AcceptStatesNotDefined));
+    }
+
+    #[test]
+    fn empty_states_error() {
+        let states = [];
+
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::EmptyStates));
+    }
+
+    #[test]
+    fn state_missing_transition_error() {
+        let states = [DfaState::new("q1").transition('a', "q1")];
+
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::StateMissingTransition("q1", 'b')));
+    }
+
+    #[test]
+    fn char_not_in_alphabet_error() {
+        let states = [DfaState::new("q1")
+            .transition('a', "q1")
+            .transition('b', "q1")
+            .transition('c', "q1")];
+
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::CharNotInAlphabet('c')));
+    }
+
+    #[test]
+    fn invalid_transition_destination_error() {
+        let states = [DfaState::new("q1")
+            .transition('a', "q1")
+            .transition('b', "q2")];
+
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::InvalidTransitionDestination("q2")));
+    }
+
+    #[test]
+    fn non_ascii_char_error() {
+        let states = [DfaState::new("q1")
+            .transition('a', "q1")
+            .transition('b', "q1")];
+
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'ø'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::NonAsciiChar('ø')));
+    }
+
+    #[test]
+    fn invalid_initial_state() {
+        let states = [DfaState::new("q1")
+            .transition('a', "q1")
+            .transition('b', "q1")];
+
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q2")
+            .accept_states(&["q1"])
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::InvalidInitialState("q2")));
+    }
+
+    #[test]
+    fn invalid_accept_state() {
+        let states = [DfaState::new("q1")
+            .transition('a', "q1")
+            .transition('b', "q1")];
+
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1", "q2"])
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_err_and(|e| e == DfaError::InvalidAcceptState("q2")));
+    }
+
+    #[test]
+    fn intended_use() {
+        let states = [DfaState::new("q1")
+            .transition('a', "q1")
+            .transition('b', "q1")];
+
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&states)
+            .build();
+
+        assert!(dfa.is_ok());
+    }
+}
+// endregion
 
 #[cfg(test)]
-mod public_api {}
+mod public_api {
+    use crate::dfa::{Dfa, DfaError, DfaState};
+
+    #[test]
+    fn invalid_input_char_error() {
+        // for some reason it is impossible to get lifetimes to work with
+        // error propagation and defining a lifetime variable
+        // as such, expect was used as a last resort
+
+        let states = [DfaState::new("q1")
+            .transition('a', "q1")
+            .transition('b', "q1")];
+
+        let mut dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&states)
+            .build()
+            .expect("failed to build dfa");
+
+        assert!(dfa
+            .advance('c')
+            .is_err_and(|e| e == DfaError::InvalidInputChar('c')));
+    }
+
+    #[test]
+    fn in_accept_state_true() {
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&[DfaState::new("q1")
+                .transition('a', "q1")
+                .transition('b', "q1")])
+            .build()
+            .expect("failed to build dfa");
+
+        assert!(dfa.in_accept_state());
+    }
+
+    #[test]
+    fn in_accept_state_false() {
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q2"])
+            .states(&[
+                DfaState::new("q1")
+                    .transition('a', "q2")
+                    .transition('b', "q2"),
+                DfaState::new("q2")
+                    .transition('a', "q1")
+                    .transition('b', "q1"),
+            ])
+            .build()
+            .expect("failed to build dfa");
+
+        assert!(!dfa.in_accept_state());
+    }
+
+    #[test]
+    fn in_accept_state_true_after_advance() {
+        let mut dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q2"])
+            .states(&[
+                DfaState::new("q1")
+                    .transition('a', "q2")
+                    .transition('b', "q2"),
+                DfaState::new("q2")
+                    .transition('a', "q1")
+                    .transition('b', "q1"),
+            ])
+            .build()
+            .expect("failed to build dfa");
+
+        dfa.advance('a').expect("failed to advance");
+        assert!(dfa.in_accept_state());
+    }
+
+    #[test]
+    fn in_accept_state_false_after_advance() {
+        let mut dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&[
+                DfaState::new("q1")
+                    .transition('a', "q2")
+                    .transition('b', "q2"),
+                DfaState::new("q2")
+                    .transition('a', "q1")
+                    .transition('b', "q1"),
+            ])
+            .build()
+            .expect("failed to build dfa");
+
+        dfa.advance('a').expect("failed to advance");
+        assert!(!dfa.in_accept_state());
+    }
+
+    #[test]
+    fn check_input_accepts() {
+        // dfa should accept any input with "ab" suffix
+        let mut dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q3"])
+            .states(&[
+                DfaState::new("q1")
+                    .transition('a', "q2")
+                    .transition('b', "q1"),
+                DfaState::new("q2")
+                    .transition('a', "q2")
+                    .transition('b', "q3"),
+                DfaState::new("q3")
+                    .transition('a', "q2")
+                    .transition('b', "q1"),
+            ])
+            .build()
+            .expect("failed to build dfa");
+
+        let inputs = &["ab", "abab", "aaaaaab", "bbbbbbab"];
+
+        for input in inputs {
+            assert!(dfa.check_input(input).expect("failed to check input"));
+        }
+    }
+
+    #[test]
+    fn check_input_declines() {
+        // dfa should accept any input with "ab" suffix
+        let mut dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q3"])
+            .states(&[
+                DfaState::new("q1")
+                    .transition('a', "q2")
+                    .transition('b', "q1"),
+                DfaState::new("q2")
+                    .transition('a', "q2")
+                    .transition('b', "q3"),
+                DfaState::new("q3")
+                    .transition('a', "q2")
+                    .transition('b', "q1"),
+            ])
+            .build()
+            .expect("failed to build dfa");
+
+        let inputs = &["aba", "abba", "bbbbbbbbaa", "aaaaaaaaaaaaaaaaaaba"];
+
+        for input in inputs {
+            assert!(!dfa.check_input(input).expect("failed to check input"));
+        }
+    }
+}
 
 // endregion
