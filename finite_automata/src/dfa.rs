@@ -1,265 +1,282 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
-pub trait DfaBuilder<'a> {
-    fn initial_state(self, initial_state: &'a str) -> Self;
+// region: Types
 
-    fn alphabet<I>(self, itr: I) -> Self
-    where
-        I: IntoIterator<Item = char>;
+type TransitionTable = HashMap<(char, Rc<str>), Rc<str>>;
 
-    fn accept_states<I>(self, itr: I) -> Self
-    where
-        I: IntoIterator<Item = &'a str>;
+// endregion
 
-    fn states<I>(self, itr: I) -> Self
-    where
-        I: IntoIterator<Item = DfaState<'a>>;
+// region: Deterministic Finite Automata
 
-    fn build(self) -> Result<Self, DfaError<'a>>
-    where
-        Self: Sized;
+pub struct Dfa {
+    alphabet: Box<[char]>,
+    transitions: TransitionTable,
+    initial_state: Rc<str>,
+    accept_states: Box<[Rc<str>]>,
+    current_state: Rc<str>,
 }
 
-/// A deterministic finite automata.
+impl<'a> Dfa {
+    // region: Public API
+
+    /// Advances the Dfa with the provided input char.
+    #[inline]
+    pub fn advance(&mut self, input: char) -> Result<&str, DfaError<'a>> {
+        if !self.alphabet.contains(&input) {
+            return Err(DfaError::InvalidInputChar(input));
+        }
+
+        // all possible transitions are checked during the build,
+        // as such it should be impossible to have an invalid transition at this point
+        let new_state_rc = self
+            .transitions
+            .get(&(input, Rc::clone(&self.current_state)))
+            .unwrap();
+        self.current_state = Rc::clone(new_state_rc);
+        Ok(new_state_rc.as_ref())
+    }
+
+    /// Checks if the provided input is accepted by the defined Dfa.
+    pub fn check_input(&mut self, input_str: &str) {}
+
+    // endregion
+
+    // region: Internal Implementation
+
+    // endregion
+}
+
+// endregion
+
+// region: Deterministic Finite Automata Builder
+
 #[derive(Debug, Default)]
-pub struct Dfa<'a> {
-    current_state: Option<DfaState<'a>>,
-    initial_state: &'a str,
-    accept_states: Vec<&'a str>,
-    alphabet: Vec<char>,
-    state_order: Vec<&'a str>,
-    state_map: HashMap<&'a str, DfaState<'a>>,
+pub struct DfaBuilder<'a> {
+    alphabet: Option<&'a [char]>,
+    initial_state: Option<&'a str>,
+    accept_states: Option<&'a [&'a str]>,
+    states: Option<&'a [DfaState<'a>]>,
 }
 
-impl<'a> Dfa<'a> {
+impl<'a> DfaBuilder<'a> {
+    // region: Builder API
+
     pub fn new() -> Self {
         Self::default()
     }
 
-    #[inline]
-    pub fn advance_with(&mut self, input_char: char) {
-        let state = self.current_state.take().unwrap();
-        let new_state_name = state.transitions.get(&input_char).unwrap();
-        let new_state = self.state_map.get(new_state_name).unwrap().clone();
-        self.current_state = Some(new_state);
-    }
-
-    #[inline]
-    pub fn check_input(&mut self, input_str: &str) -> bool {
-        for input in input_str.chars() {
-            self.advance_with(input);
-        }
-
-        self.in_accept_state()
-    }
-
-    #[inline]
-    pub fn in_accept_state(&mut self) -> bool {
-        let state = self.current_state.take().unwrap();
-        let accepted = self.accept_states.contains(&state.name);
-        self.current_state = Some(state);
-        accepted
-    }
-
-    #[inline]
-    pub fn state_order(&self) -> &Vec<&'a str> {
-        &self.state_order
-    }
-}
-
-impl<'a> DfaBuilder<'a> for Dfa<'a> {
-    fn initial_state(mut self, initial_state: &'a str) -> Self {
-        self.initial_state = initial_state;
+    pub fn alphabet(mut self, slice: &'a [char]) -> Self {
+        self.alphabet = Some(slice);
         self
     }
 
-    fn alphabet<I>(mut self, itr: I) -> Self
-    where
-        I: IntoIterator<Item = char>,
-    {
-        self.alphabet = itr.into_iter().collect();
+    pub fn initial_state(mut self, name: &'a str) -> Self {
+        self.initial_state = Some(name);
         self
     }
 
-    fn accept_states<I>(mut self, itr: I) -> Self
-    where
-        I: IntoIterator<Item = &'a str>,
-    {
-        self.accept_states = itr.into_iter().collect();
+    pub fn states(mut self, states: &'a [DfaState<'a>]) -> Self {
+        self.states = Some(states);
         self
     }
 
-    fn states<I>(mut self, itr: I) -> Self
-    where
-        I: IntoIterator<Item = DfaState<'a>>,
-    {
-        for state in itr.into_iter() {
-            self.state_map.insert(state.name, state);
-        }
+    pub fn build(self) -> Result<Dfa, DfaError<'a>> {
+        use DfaError::*;
 
-        self
+        let state_map: HashMap<&str, Rc<str>> = match self.states {
+            Some(slice) => {
+                let mut map = HashMap::new();
+                for state in slice.iter() {
+                    map.insert(state.name.as_ref(), Rc::clone(&state.name));
+                }
+
+                map
+            }
+            None => return Err(StatesNotDefined),
+        };
+
+        let start_state = self.generate_initial_state(&state_map)?;
+        Ok(Dfa {
+            alphabet: self.generate_alphabet()?,
+            transitions: self.generate_transitions(&state_map)?,
+            initial_state: Rc::clone(&start_state),
+            accept_states: self.generate_accept_states(&state_map)?,
+            current_state: start_state,
+        })
     }
 
-    /// Ensures that the DFA has been correctly specified, and returns errors when relevant.
-    ///
-    /// **If this method is not called, then the behaviour of the Dfa cannot be guarenteed.**
-    fn build(mut self) -> Result<Self, DfaError<'a>> {
-        if self.alphabet.is_empty() {
-            return Err(DfaError::UndefinedAlphabet);
-        }
+    // endregion
 
-        if self.initial_state.is_empty() {
-            return Err(DfaError::UndefinedInitialState);
-        }
+    // region: Internal Builder Methods
 
-        if self.state_map.is_empty() {
-            return Err(DfaError::UndefinedStates);
-        } else {
-            let state_names: Vec<&str> = self.state_map.values().map(|s| s.name).collect();
-            // Ensuring that a transition exists for each possible input
-            // for each defined state of the Dfa.
-            for (_, state) in self.state_map.iter() {
-                for c in self.alphabet.iter() {
-                    match state.transitions.get(c) {
-                        Some(transition_target) => {
-                            if !state_names.contains(transition_target) {
-                                return Err(DfaError::InvalidTransition(
-                                    state.name,
-                                    transition_target,
-                                ));
-                            }
-                        }
-                        None => return Err(DfaError::MissingTransition(state.name, *c)),
+    #[inline]
+    fn generate_transitions(
+        &self,
+        state_map: &HashMap<&str, Rc<str>>,
+    ) -> Result<TransitionTable, DfaError<'a>> {
+        use DfaError::*;
+
+        let slice = self.states.unwrap();
+        let alphabet_slice = self.alphabet.unwrap();
+
+        // The final transition table used in the Dfa is a HashMap of the following type
+        // as such, a tuple of an input char and a current state is provided to yield the
+        // next state the Dfa will transition to.
+        let mut map: TransitionTable = HashMap::new();
+
+        for state in slice.iter() {
+            for c in alphabet_slice.iter() {
+                // a Dfa requires that each state has a valid transition for every possible input
+                if state.transitions.get(c).is_none() {
+                    return Err(StateMissingTransition(state.name.as_ref(), *c));
+                }
+            }
+
+            for (trans_input, trans_dest) in state.transitions.iter() {
+                // all transitions must be defined with symbols that are a part of the defined alphabet
+                if !alphabet_slice.contains(trans_input) {
+                    return Err(InvalidCharTransition(*trans_input));
+                }
+
+                match state_map.get(trans_dest) {
+                    Some(state_name_rc) => {
+                        map.insert(
+                            (*trans_input, Rc::clone(&state.name)),
+                            Rc::clone(state_name_rc),
+                        );
                     }
+                    // transition destinations are only allowed within the defined states
+                    None => return Err(InvalidTransitionDestination(trans_dest)),
                 }
             }
         }
 
-        self.current_state = match self.state_map.get(self.initial_state) {
-            Some(start_state) => Some(start_state.clone()),
-            None => return Err(DfaError::InvalidInitialState),
-        };
-
-        Ok(self)
+        Ok(map)
     }
+
+    #[inline]
+    fn generate_alphabet(&self) -> Result<Box<[char]>, DfaError<'a>> {
+        use DfaError::*;
+
+        match self.alphabet {
+            Some(slice) => {
+                for c in slice.iter() {
+                    if !c.is_ascii() {
+                        return Err(NonAsciiChar(*c));
+                    }
+                }
+
+                unsafe {
+                    Ok(Box::from_raw(std::slice::from_raw_parts_mut(
+                        slice.as_ptr() as *mut char,
+                        slice.len(),
+                    )))
+                }
+            }
+            None => Err(AlphabetNotDefined),
+        }
+    }
+
+    #[inline]
+    fn generate_initial_state(
+        &self,
+        state_map: &HashMap<&str, Rc<str>>,
+    ) -> Result<Rc<str>, DfaError<'a>> {
+        use DfaError::*;
+
+        match self.initial_state {
+            Some(initial_state_name) => {
+                let Some(initial_state_rc) = state_map.get(initial_state_name) else {
+                    return Err(InvalidInitialState(initial_state_name));
+                };
+
+                Ok(Rc::clone(initial_state_rc))
+            }
+            None => Err(InitialStateNotDefined),
+        }
+    }
+
+    #[inline]
+    fn generate_accept_states(
+        &self,
+        state_map: &HashMap<&str, Rc<str>>,
+    ) -> Result<Box<[Rc<str>]>, DfaError<'a>> {
+        use DfaError::*;
+
+        match self.accept_states {
+            Some(slice) => {
+                let mut rc_vec = Vec::new();
+
+                for state_name in slice {
+                    match state_map.get(state_name) {
+                        Some(state_name_rc) => rc_vec.push(Rc::clone(state_name_rc)),
+                        None => return Err(InvalidAcceptState(state_name)),
+                    }
+                }
+
+                Ok(rc_vec.into_boxed_slice())
+            }
+            None => Err(AcceptStatesNotDefined),
+        }
+    }
+
+    // endregion
 }
 
-#[derive(Debug, Clone)]
+// endregion
+
+// region: Deterministic Finite Automata State
+
+#[derive(Debug)]
 pub struct DfaState<'a> {
-    name: &'a str,
+    name: Rc<str>,
     transitions: HashMap<char, &'a str>,
 }
 
 impl<'a> DfaState<'a> {
-    fn new(state_name: &'a str) -> Self {
+    pub fn new(name: &str) -> Self {
         Self {
-            name: state_name,
+            name: Rc::from(name),
             transitions: HashMap::new(),
         }
     }
 
-    /// Adds a transition from the state the method is called on, via the `input_char` to the `next_state`.
-    ///
-    /// **If multiple transitions are added of the same input, then the last defined transition is the active one.**
-    fn add_transition(mut self, input_char: char, next_state: &'a str) -> Self {
-        self.transitions.insert(input_char, next_state);
+    pub fn transition(mut self, input: char, new_state: &'a str) -> Self {
+        self.transitions.insert(input, new_state);
         self
     }
 }
 
-#[derive(Debug, thiserror::Error, PartialEq)]
+// endregion
+
+// region: Deterministic Finite Automata Errors
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
 pub enum DfaError<'a> {
-    #[error("an alphabet was not defined")]
-    UndefinedAlphabet,
+    #[error("the alphabet for the dfa was not defined")]
+    AlphabetNotDefined,
+    #[error("'{0}' is not an ASCII character")]
+    NonAsciiChar(char),
+    #[error("the states of the dfa were not defined")]
+    StatesNotDefined,
+    #[error("'{0}' is not a part of the defined alphabet, and cannot be used in a transition")]
+    InvalidCharTransition(char),
+    #[error("the state '{0}' does not have a transition for the alphabet character '{1}'")]
+    StateMissingTransition(&'a str, char),
+    #[error("'{0}' is not one of the defined states, and cannot be used as a destination for a transition")]
+    InvalidTransitionDestination(&'a str),
     #[error("the initial state was not defined")]
-    UndefinedInitialState,
-    #[error("the states were not defined")]
-    UndefinedStates,
-    #[error("the initial state is not one of the defined states")]
-    InvalidInitialState,
-    #[error("the state, '{0}', is missing a transition for the input '{1}'")]
-    MissingTransition(&'a str, char),
-    #[error("a transition is defined from state '{0}' to state '{1}', however the destination is an undefined state")]
-    InvalidTransition(&'a str, &'a str),
+    InitialStateNotDefined,
+    #[error("'{0}' is not one of the defined states, and cannot be used as the initial state")]
+    InvalidInitialState(&'a str),
+    #[error("the accept states were not defined")]
+    AcceptStatesNotDefined,
+    #[error("'{0}' is not one of the defined states, and cannot be used as an accept state")]
+    InvalidAcceptState(&'a str),
+    #[error("'{0}' is not a part of the defined alphabet")]
+    InvalidInputChar(char),
 }
 
-#[cfg(test)]
-mod dfa_builder {
-    use crate::dfa::{Dfa, DfaBuilder, DfaError, DfaState};
-
-    #[test]
-    fn undefined_alphabet() {
-        let res = Dfa::new()
-            .initial_state("q0")
-            .states([DfaState::new("q0")])
-            .build();
-        assert!(res.is_err_and(|e| e == DfaError::UndefinedAlphabet))
-    }
-
-    #[test]
-    fn undefined_initial_state() {
-        let res = Dfa::new()
-            .alphabet(['a', 'b'])
-            .states([DfaState::new("q0")])
-            .build();
-        assert!(res.is_err_and(|e| e == DfaError::UndefinedInitialState))
-    }
-
-    #[test]
-    fn undefined_states() {
-        let res = Dfa::new().alphabet(['a', 'b']).initial_state("q0").build();
-        assert!(res.is_err_and(|e| e == DfaError::UndefinedStates))
-    }
-
-    #[test]
-    fn missing_transition() {
-        let res = Dfa::new()
-            .alphabet(['a', 'b'])
-            .initial_state("q0")
-            .states([
-                DfaState::new("q0")
-                    .add_transition('a', "q1")
-                    .add_transition('b', "q1"),
-                DfaState::new("q1").add_transition('a', "q1"),
-            ])
-            .build();
-
-        assert!(res.is_err_and(|e| e == DfaError::MissingTransition("q1", 'b')));
-    }
-
-    #[test]
-    fn invalid_initial_state() {
-        let res = Dfa::new()
-            .alphabet(['a', 'b'])
-            .initial_state("q3")
-            .states([
-                DfaState::new("q0")
-                    .add_transition('a', "q1")
-                    .add_transition('b', "q1"),
-                DfaState::new("q1")
-                    .add_transition('a', "q1")
-                    .add_transition('b', "q1"),
-            ])
-            .build();
-
-        assert!(res.is_err_and(|e| e == DfaError::InvalidInitialState));
-    }
-
-    #[test]
-    fn invalid_transition() {
-        let res = Dfa::new()
-            .alphabet(['a', 'b'])
-            .initial_state("q0")
-            .states([
-                DfaState::new("q0")
-                    .add_transition('a', "q1")
-                    .add_transition('b', "q1"),
-                DfaState::new("q1")
-                    .add_transition('a', "q1")
-                    .add_transition('b', "q3"),
-            ])
-            .build();
-
-        assert!(res.is_err_and(|e| e == DfaError::InvalidTransition("q1", "q3")));
-    }
-}
+// endregion
