@@ -9,6 +9,47 @@ type TransitionTable = HashMap<(char, Rc<str>), Rc<str>>;
 
 // region: Deterministic Finite Automata
 
+/// A deterministic finite automata.
+///
+/// # Usage
+/// A valid Dfa must have values for the following properties:
+/// - alphabet (a slice of ASCII characters)
+/// - initial state
+/// - accept states
+/// - states
+///
+/// Use the [`builder`] method to create and define the Dfa.
+///
+/// Alternatively, the [`DfaBuilder`] struct can also be used for creating a Dfa.
+///
+/// # Examples
+/// ```
+/// use finite_automata::dfa::{Dfa, DfaState};
+/// // the Dfa defined below accepts any
+/// // input string with the suffix "ab"
+/// let mut dfa = Dfa::builder()
+///     .alphabet(&['a', 'b'])
+///     .initial_state("q1")
+///     .accept_states(&["q3"])
+///     .states(&[
+///         DfaState::new("q1")
+///             .transition('a', "q2")
+///             .transition('b', "q1"),
+///         DfaState::new("q2")
+///             .transition('a', "q2")
+///             .transition('b', "q3"),
+///         DfaState::new("q3")
+///             .transition('a', "q2")
+///             .transition('b', "q1"),
+///     ])
+///     .build()
+///     .expect("failed to build dfa");
+///
+/// // the check_input method returns an error
+/// // upon encountering invalid input characters
+/// assert!(dfa.check_input("ab").is_ok_and(|b| b == true));
+/// assert!(dfa.check_input("aba").is_ok_and(|b| b == false));
+/// ```
 pub struct Dfa {
     alphabet: Box<[char]>,
     transitions: TransitionTable,
@@ -31,6 +72,44 @@ impl<'a> Dfa {
     }
 
     /// Advances the Dfa with the provided input char.
+    ///
+    /// Upon a successful advance, the name of the new state is contained within the `Ok` enum.
+    ///
+    /// # Errors
+    /// Returns an `Err` variant if the input character is not a part of the defined alphabet.
+    ///
+    /// # Examples
+    /// ```
+    /// # use finite_automata::dfa::{Dfa, DfaState};
+    /// # let mut dfa = Dfa::builder()
+    /// #     .alphabet(&['a', 'b'])
+    /// #     .initial_state("q1")
+    /// #     .accept_states(&["q3"])
+    /// #     .states(&[
+    /// #         DfaState::new("q1")
+    /// #             .transition('a', "q2")
+    /// #             .transition('b', "q1"),
+    /// #         DfaState::new("q2")
+    /// #             .transition('a', "q2")
+    /// #             .transition('b', "q3"),
+    /// #         DfaState::new("q3")
+    /// #             .transition('a', "q2")
+    /// #             .transition('b', "q1"),
+    /// #     ])
+    /// #     .build()
+    /// #     .expect("failed to build dfa");
+    /// // the dfa in this example recognizes any input sequence with the suffix "ab"
+    /// assert!(!dfa.in_accept_state()); // not starting in accept state
+    /// dfa.advance('a').expect("failed to advance input");
+    ///
+    /// assert!(!dfa.in_accept_state()); // first input does not advance to accept state
+    /// dfa.advance('b').expect("failed to advance input");
+    ///
+    /// assert!(dfa.in_accept_state()); // dfa is now in accept state
+    /// dfa.advance('a').expect("failed to advance input");
+    ///
+    /// assert!(!dfa.in_accept_state()); // suffix is no longer "ab"
+    /// ```
     #[inline]
     pub fn advance(&mut self, input: char) -> Result<&str, DfaError<'a>> {
         if !self.alphabet.contains(&input) {
@@ -49,11 +128,19 @@ impl<'a> Dfa {
     }
 
     /// Checks if the provided input is accepted by the defined Dfa.
+    /// The `Ok` variant contains a bool, where *true* means the input was accepted,
+    /// and *false* means the input was declined.
+    ///
+    /// This method resets the state order before computing the input.
     ///
     /// **This method is self-contained, meaning it starts in the `initial state`.**
     ///
-    /// Should you wish to check an input without this behaviour, then use [`check_input_without_reset`] method instead.
+    /// Should you wish to check an input without this behaviour, then use [`check_input_from_current`] method instead.
+    ///
+    /// # Errors
+    /// Returns an `Err` variant if any character in the input string is not a part of the defined alphabet.
     pub fn check_input(&mut self, input_str: &str) -> Result<bool, DfaError<'a>> {
+        self.reset_state_order();
         self.current_state = Rc::clone(&self.initial_state);
 
         for c in input_str.chars() {
@@ -63,7 +150,13 @@ impl<'a> Dfa {
         Ok(self.in_accept_state())
     }
 
-    pub fn check_input_without_reset(&mut self, input_str: &str) -> Result<bool, DfaError<'a>> {
+    /// This method is a variant of [`check_input`] and behaves the same, as such its documentation should
+    /// be sought out for information regarding its use.
+    ///
+    /// The following expections apply:
+    /// - This method starts from the current state of the Dfa, not the initial state.
+    /// - This method does not reset the state order
+    pub fn check_input_from_current(&mut self, input_str: &str) -> Result<bool, DfaError<'a>> {
         for c in input_str.chars() {
             self.advance(c)?;
         }
@@ -538,6 +631,65 @@ mod dfa_builder {
 
         assert!(dfa.is_ok());
     }
+
+    #[test]
+    fn correct_initial_state() {
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&[DfaState::new("q1")
+                .transition('a', "q1")
+                .transition('b', "q1")])
+            .build()
+            .expect("failed to build dfa");
+
+        let actual = dfa.initial_state.as_ref();
+        let expected = "q1";
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn correct_current_state() {
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1"])
+            .states(&[DfaState::new("q1")
+                .transition('a', "q1")
+                .transition('b', "q1")])
+            .build()
+            .expect("failed to build dfa");
+
+        let actual = dfa.current_state.as_ref();
+        let expected = "q1";
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn correct_accept_states() {
+        let dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q1", "q2"])
+            .states(&[
+                DfaState::new("q1")
+                    .transition('a', "q1")
+                    .transition('b', "q1"),
+                DfaState::new("q2")
+                    .transition('a', "q1")
+                    .transition('b', "q2"),
+            ])
+            .build()
+            .expect("failed to build dfa");
+
+        let actual_one = dfa.accept_states[0].as_ref();
+        let expected_one = "q1";
+        let actual_two = dfa.accept_states[1].as_ref();
+        let expected_two = "q2";
+        assert_eq!(actual_one, expected_one);
+        assert_eq!(actual_two, expected_two);
+    }
 }
 // endregion
 
@@ -699,6 +851,52 @@ mod public_api {
         for input in inputs {
             assert!(!dfa.check_input(input).expect("failed to check input"));
         }
+    }
+
+    #[test]
+    fn advance_changing_state() {
+        let mut dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q2"])
+            .states(&[
+                DfaState::new("q1")
+                    .transition('a', "q2")
+                    .transition('b', "q1"),
+                DfaState::new("q2")
+                    .transition('a', "q2")
+                    .transition('b', "q2"),
+            ])
+            .build()
+            .expect("failed to build dfa");
+
+        dfa.advance('a').expect("failed to advance");
+        let actual = dfa.current_state.as_ref();
+        let expected = "q2";
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn advance_not_changing_state() {
+        let mut dfa = Dfa::builder()
+            .alphabet(&['a', 'b'])
+            .initial_state("q1")
+            .accept_states(&["q2"])
+            .states(&[
+                DfaState::new("q1")
+                    .transition('a', "q2")
+                    .transition('b', "q1"),
+                DfaState::new("q2")
+                    .transition('a', "q2")
+                    .transition('b', "q2"),
+            ])
+            .build()
+            .expect("failed to build dfa");
+
+        dfa.advance('b').expect("failed to advance");
+        let actual = dfa.current_state.as_ref();
+        let expected = "q1";
+        assert_eq!(actual, expected);
     }
 }
 
