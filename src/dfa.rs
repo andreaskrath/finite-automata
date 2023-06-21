@@ -218,6 +218,22 @@ impl<'a> DfaBuilder<'a> {
         Self::default()
     }
 
+    /// Sets the alphabet of the Dfa; the alphabet must only include ASCII characters.
+    ///
+    /// This method is a part of the builder pattern for the Dfa construct;
+    /// the following methods must be called to build a valid Dfa:
+    /// - [`alphabet`]
+    /// - [`initial_state`]
+    /// - [`accept_states`]
+    /// - [`states`]
+    ///
+    /// After which the Dfa is validated and constructed via the [`build`] method.
+    ///
+    /// # Examples
+    /// ```
+    /// use finite_automata::dfa::Dfa;
+    /// let mut dfa = Dfa::builder().alphabet(&['a', 'b', 'c']);
+    /// ```
     pub fn alphabet(mut self, slice: &'a [char]) -> Self {
         self.alphabet = Some(slice);
         self
