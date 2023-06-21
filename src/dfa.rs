@@ -239,6 +239,45 @@ impl<'a> DfaBuilder<'a> {
         self
     }
 
+    /// Sets the initial state of the Dfa; the initial state must be;
+    /// the initial state must be one of the defined states in the [`states`] method.
+    ///
+    /// This method is a part of the builder pattern for the Dfa construct;
+    /// the following methods must be called to build a valid Dfa:
+    /// - [`alphabet`]
+    /// - [`initial_state`]
+    /// - [`accept_states`]
+    /// - [`states`]
+    ///
+    /// After which the Dfa is validated and constructed via the [`build`] method.
+    ///
+    /// # Examples
+    /// The method can be used directly on the builder,
+    /// although this will not yield a valid Dfa.
+    ///
+    /// ```
+    /// use finite_automata::dfa::Dfa;
+    /// let mut dfa = Dfa::builder().initial_state("q1");
+    /// ```
+    ///
+    /// Instead it must be used as part of a complete build call; **the order of methods do not matter**.
+    ///
+    /// ```
+    /// use finite_automata::dfa::{Dfa, DfaState};
+    /// let states = [DfaState::new("q1")
+    ///         .transition('a', "q1")
+    ///         .transition('b', "q1")
+    ///     ];
+    ///
+    /// let mut dfa = Dfa::builder()
+    ///     .alphabet(&['a', 'b'])
+    ///     .initial_state("q1")
+    ///     .accept_states(&["q1"])
+    ///     .states(&states)
+    ///     .build();
+    ///
+    /// assert!(dfa.is_ok());
+    /// ```
     pub fn initial_state(mut self, name: &'a str) -> Self {
         self.initial_state = Some(name);
         self
