@@ -230,9 +230,30 @@ impl<'a> DfaBuilder<'a> {
     /// After which the Dfa is validated and constructed via the [`build`] method.
     ///
     /// # Examples
+    /// The method can be used directly on the builder,
+    /// although this will not yield a valid Dfa.
     /// ```
     /// use finite_automata::dfa::Dfa;
     /// let mut dfa = Dfa::builder().alphabet(&['a', 'b', 'c']);
+    /// ```
+    ///
+    /// Instead it must be used as part of a complete build call; **the order of methods do not matter**.
+    ///
+    /// ```
+    /// use finite_automata::dfa::{Dfa, DfaState};
+    /// let states = [DfaState::new("q1")
+    ///         .transition('a', "q1")
+    ///         .transition('b', "q1")
+    ///     ];
+    ///
+    /// let mut dfa = Dfa::builder()
+    ///     .alphabet(&['a', 'b'])
+    ///     .initial_state("q1")
+    ///     .accept_states(&["q1"])
+    ///     .states(&states)
+    ///     .build();
+    ///
+    /// assert!(dfa.is_ok());
     /// ```
     pub fn alphabet(mut self, slice: &'a [char]) -> Self {
         self.alphabet = Some(slice);
